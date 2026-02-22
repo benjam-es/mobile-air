@@ -86,7 +86,7 @@ class BuildIosAppCommand extends Command
     {
         @mkdir($this->appPath, 0755, true);
 
-        $this->copyLaravelAppIntoIosApp();
+        $this->components->task('Copying Laravel app', fn () => $this->copyLaravelAppIntoIosApp());
 
         // Set ASSET_URL in .env
         file_put_contents($this->appPath.'.env', PHP_EOL.'ASSET_URL="/_assets"'.PHP_EOL, FILE_APPEND);
@@ -174,55 +174,75 @@ class BuildIosAppCommand extends Command
         // Make sure we clear out any old version
         shell_exec("rm -rf {$destination}/*");
 
-        $source = rtrim(str_replace('\\', '/', base_path()), '/').'/';
+        $source = rtrim(base_path(), '/');
 
-        $visitedRealPaths = [];
-        $files = [];
+        $excludes = $this->getExcludedPaths();
 
-        $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator(
-                $source,
-                \RecursiveDirectoryIterator::SKIP_DOTS | \FilesystemIterator::FOLLOW_SYMLINKS
-            ),
-            \RecursiveIteratorIterator::LEAVES_ONLY
-        );
+        // Respect export-ignore from vendor package .gitattributes files
+        foreach ($this->loadVendorExportIgnorePatterns($source) as $prefix => $patterns) {
+            foreach ($patterns as $pattern) {
+                $excludes[] = $prefix.ltrim($pattern, '/');
+            }
+        }
 
-        foreach ($iterator as $file) {
-            $realPath = $file->getRealPath();
+        $excludeFlags = implode(' ', array_map(fn ($d) => "--exclude='{$d}'", $excludes));
+        $result = Process::run("rsync -a --copy-links {$excludeFlags} \"{$source}/\" \"{$destination}/\"");
 
-            // Skip if we've already visited this real path (prevents infinite loops from circular symlinks)
-            if ($realPath === false || isset($visitedRealPaths[$realPath])) {
+        if (! $result->successful()) {
+            throw new \Exception('Failed to copy Laravel app: '.$result->errorOutput());
+        }
+    }
+
+    /**
+     * Load export-ignore patterns from .gitattributes in vendor packages.
+     *
+     * @return array<string, string[]>
+     */
+    private function loadVendorExportIgnorePatterns(string $source): array
+    {
+        $patterns = [];
+        $vendorPath = $source.'/vendor/';
+
+        if (! is_dir($vendorPath)) {
+            return $patterns;
+        }
+
+        foreach (new \DirectoryIterator($vendorPath) as $namespace) {
+            if ($namespace->isDot() || ! $namespace->isDir()) {
                 continue;
             }
 
-            $visitedRealPaths[$realPath] = true;
-            $files[] = $file;
-        }
+            foreach (new \DirectoryIterator($namespace->getPathname()) as $package) {
+                if ($package->isDot() || ! $package->isDir()) {
+                    continue;
+                }
 
-        foreach ($files as $file) {
-            // Where the *link* lives (keeps relative paths correct)
-            $logicalPath = str_replace('\\', '/', $file->getPathname());
-            // Where the link **points** (or the same file if not a link)
-            $realPath = str_replace('\\', '/', $file->getRealPath());
+                $gitattributes = $package->getPathname().'/.gitattributes';
+                if (! file_exists($gitattributes)) {
+                    continue;
+                }
 
-            $relativePath = ltrim(substr($logicalPath, strlen($source)), '/');
+                $ignores = [];
+                foreach (file($gitattributes, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+                    $line = trim($line);
+                    if ($line === '' || $line[0] === '#' || ! str_contains($line, 'export-ignore')) {
+                        continue;
+                    }
 
-            if (Str::startsWith($relativePath, 'vendor/nativephp/mobile/resources') ||
-                Str::startsWith($relativePath, 'vendor/nativephp/mobile/vendor') ||
-                Str::startsWith($relativePath, 'nativephp') ||
-                Str::startsWith($relativePath, 'output/') ||
-                Str::startsWith($relativePath, 'build/') ||
-                Str::startsWith($relativePath, 'dist/') ||
-                Str::startsWith($relativePath, 'artifacts/') ||
-                Str::startsWith($relativePath, '.git/') ||
-                Str::startsWith($relativePath, 'storage/logs/') ||
-                Str::startsWith($relativePath, 'storage/framework/cache/')) {
-                continue;
+                    $path = trim(preg_split('/\s+/', $line, 2)[0] ?? '');
+                    if ($path !== '') {
+                        $ignores[] = ltrim($path, '/');
+                    }
+                }
+
+                if (! empty($ignores)) {
+                    $prefix = 'vendor/'.$namespace->getFilename().'/'.$package->getFilename().'/';
+                    $patterns[$prefix] = $ignores;
+                }
             }
-
-            @File::makeDirectory(dirname($destination.$relativePath), recursive: true, force: true);
-            @File::copy($realPath, $destination.$relativePath);
         }
+
+        return $patterns;
     }
 
     private function updateAppVersion(): void
@@ -819,6 +839,62 @@ class BuildIosAppCommand extends Command
         @copy($path, $destinationPath);
     }
 
+    /**
+     * Paths to exclude from the app bundle.
+     *
+     * Patterns without a leading / match at any depth (e.g. inside vendor packages).
+     * Patterns with a leading / are anchored to the project root.
+     * Used by rsync during the initial copy step.
+     */
+    private function getExcludedPaths(): array
+    {
+        return [
+            // Any depth (project root + inside vendor packages)
+            '.git',
+            '.github',
+            'node_modules',
+            'tests',
+            '.DS_Store',
+            '.gitignore',
+            '.gitattributes',
+            '.gitkeep',
+            '.editorconfig',
+
+            // Project-level directories
+            '/nativephp',
+            '/output',
+            '/build',
+            '/dist',
+            '/artifacts',
+            '/storage/logs',
+            '/storage/framework',
+            '/public/storage',
+
+            // Project-level files
+            '/database/database.sqlite',
+            '/*.js',
+            '/*.md',
+            '/*.lock',
+            '/*.xml',
+            '/.env.example',
+            '/artisan',
+
+            // Non-runtime files inside vendor packages
+            '*.md',
+            'LICENSE*',
+            'docs',
+            '*.yml',
+            '*.yaml',
+            '*.neon',
+            '*.neon.dist',
+
+            // Vendor-specific
+            'vendor/nativephp/mobile/resources',
+            'vendor/*/*/vendor',
+            'vendor/livewire/livewire/src/Features/SupportFileUploads/browser_test_image_big.jpg',
+        ];
+    }
+
     private function removeUnnecessaryFiles(): void
     {
 
@@ -828,6 +904,7 @@ class BuildIosAppCommand extends Command
             'node_modules',
             'vendor/bin',
             'tests',
+            'vendor/*/*/vendor',
             'storage/logs',
             'storage/framework',
             'vendor/laravel/pint/builds',
@@ -835,7 +912,11 @@ class BuildIosAppCommand extends Command
         ];
 
         foreach ($directoriesToRemove as $dir) {
-            if (is_dir($this->appPath.$dir)) {
+            if (str_contains($dir, '*')) {
+                foreach (glob($this->appPath.$dir, GLOB_ONLYDIR) as $match) {
+                    File::deleteDirectory($match);
+                }
+            } elseif (is_dir($this->appPath.$dir)) {
                 File::deleteDirectory($this->appPath.$dir);
             }
         }
