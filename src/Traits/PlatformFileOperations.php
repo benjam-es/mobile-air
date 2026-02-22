@@ -32,9 +32,6 @@ trait PlatformFileOperations
         } else {
             // Use rsync on Unix-like systems
             if (! empty($excludedDirs)) {
-                // Add specific exclusions for nested vendor directories that cause rsync cycles
-                $excludedDirs[] = 'vendor/*/vendor';
-                $excludedDirs[] = 'vendor/nativephp/mobile/vendor';
                 $excludeFlags = implode(' ', array_map(fn ($d) => "--exclude='{$d}'", $excludedDirs));
                 $cmd = "rsync -aL {$excludeFlags} \"{$source}/\" \"{$destination}/\"";
             } else {

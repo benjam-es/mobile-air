@@ -225,12 +225,14 @@ trait PreparesBuild
                 unlink($destinationZip);
             }
 
-            $excludedDirs = match (PHP_OS_FAMILY) {
-                'Windows' => array_merge(config('nativephp.cleanup_exclude_files'), ['.git', 'node_modules', 'nativephp', 'vendor/nativephp/mobile/resources']),
-                'Linux' => array_merge(config('nativephp.cleanup_exclude_files'), ['.git', 'node_modules', 'nativephp/ios', 'nativephp/android']),
-                'Darwin' => array_merge(config('nativephp.cleanup_exclude_files'), ['.git', 'node_modules', 'nativephp/ios', 'nativephp/android']),
-                default => config('nativephp.cleanup_exclude_files'),
-            };
+            $excludedDirs = $this->getExcludedPaths();
+
+            // Respect export-ignore from vendor package .gitattributes files
+            foreach ($this->loadVendorExportIgnorePatterns($source) as $prefix => $patterns) {
+                foreach ($patterns as $pattern) {
+                    $excludedDirs[] = $prefix.ltrim($pattern, '/');
+                }
+            }
 
             $this->logToFile('  Excluded directories: '.implode(', ', $excludedDirs));
 
@@ -326,6 +328,129 @@ trait PreparesBuild
     }
 
     /**
+     * Paths to exclude from the app bundle.
+     *
+     * Patterns without a leading / match at any depth (e.g. inside vendor packages).
+     * Patterns with a leading / are anchored to the project root.
+     * Used by rsync during the initial copy step.
+     */
+    protected function getExcludedPaths(): array
+    {
+        // Any depth (project root + inside vendor packages)
+        $excludes = [
+            '.git',
+            '.github',
+            'node_modules',
+            'tests',
+            '.DS_Store',
+            '.gitignore',
+            '.gitattributes',
+            '.gitkeep',
+            '.editorconfig',
+
+            // Non-runtime files inside vendor packages
+            '*.md',
+            'LICENSE*',
+            'docs',
+            '*.yml',
+            '*.yaml',
+            '*.neon',
+            '*.neon.dist',
+
+            // Vendor-specific
+            'vendor/nativephp/mobile/resources',
+            'vendor/*/*/vendor',
+            'vendor/livewire/livewire/src/Features/SupportFileUploads/browser_test_image_big.jpg',
+        ];
+
+        // Platform-specific project-level excludes
+        if (PHP_OS_FAMILY === 'Windows') {
+            $excludes[] = '/nativephp';
+        } else {
+            $excludes[] = '/nativephp/ios';
+            $excludes[] = '/nativephp/android';
+        }
+
+        // Project-level directories
+        $excludes = array_merge($excludes, [
+            '/output',
+            '/build',
+            '/dist',
+            '/artifacts',
+            '/storage/logs',
+            '/storage/framework',
+            '/public/storage',
+        ]);
+
+        // Project-level files
+        $excludes = array_merge($excludes, [
+            '/*.js',
+            '/*.md',
+            '/*.lock',
+            '/*.xml',
+            '/.env.example',
+            '/artisan',
+        ]);
+
+        // User-configured exclusions
+        $excludes = array_merge($excludes, config('nativephp.cleanup_exclude_files', []));
+
+        return $excludes;
+    }
+
+    /**
+     * Load export-ignore patterns from .gitattributes in vendor packages.
+     *
+     * @return array<string, string[]>
+     */
+    protected function loadVendorExportIgnorePatterns(string $source): array
+    {
+        $patterns = [];
+        $vendorPath = $source.'/vendor/';
+
+        if (! is_dir($vendorPath)) {
+            return $patterns;
+        }
+
+        foreach (new \DirectoryIterator($vendorPath) as $namespace) {
+            if ($namespace->isDot() || ! $namespace->isDir()) {
+                continue;
+            }
+
+            foreach (new \DirectoryIterator($namespace->getPathname()) as $package) {
+                if ($package->isDot() || ! $package->isDir()) {
+                    continue;
+                }
+
+                $gitattributes = $package->getPathname().'/.gitattributes';
+                if (! file_exists($gitattributes)) {
+                    continue;
+                }
+
+                $ignores = [];
+                foreach (file($gitattributes, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+                    $line = trim($line);
+                    if ($line === '' || $line[0] === '#' || ! str_contains($line, 'export-ignore')) {
+                        continue;
+                    }
+
+                    $path = trim(preg_split('/\s+/', $line, 2)[0] ?? '');
+                    if ($path !== '') {
+                        $ignores[] = ltrim($path, '/');
+                    }
+                }
+
+                if (! empty($ignores)) {
+                    $prefix = 'vendor/'.$namespace->getFilename().'/'.$package->getFilename().'/';
+                    $patterns[$prefix] = $ignores;
+                }
+            }
+        }
+
+        return $patterns;
+    }
+
+    /**
      * Create ZIP bundle with cross-platform support
      */
     protected function createZipBundle(string $source, string $destination, array $excludedDirs = []): void
@@ -384,12 +509,12 @@ trait PreparesBuild
     {
         $source = rtrim(str_replace('\\', '/', $source), '/').'/';
 
-        $files = iterator_to_array(new \RecursiveIteratorIterator(
+        $iterator = new \RecursiveIteratorIterator(
             new \RecursiveDirectoryIterator($source, \RecursiveDirectoryIterator::SKIP_DOTS),
             \RecursiveIteratorIterator::LEAVES_ONLY
-        ));
+        );
 
-        foreach ($files as $file) {
+        foreach ($iterator as $file) {
             $filePath = str_replace('\\', '/', $file->getRealPath());
             $relativePath = ltrim(str_replace('\\', '/', substr($filePath, strlen($source))), '/');
 
@@ -412,20 +537,14 @@ trait PreparesBuild
                 }
             }
 
-            // Always exclude these directories
+            // Safety net for files that may be created between rsync and zip
             if ($shouldExclude ||
-                Str::startsWith($relativePath, 'vendor/nativephp/mobile/resources') ||
-                Str::startsWith($relativePath, 'vendor/nativephp/mobile/vendor') ||
-                Str::startsWith($relativePath, 'vendor/endroid') ||
-                Str::startsWith($relativePath, '.idea') ||
-                Str::startsWith($relativePath, 'output') ||
                 Str::startsWith($relativePath, 'storage/framework/views/') ||
                 Str::startsWith($relativePath, 'storage/framework/cache/') ||
                 Str::startsWith($relativePath, 'storage/framework/sessions/') ||
                 Str::startsWith($relativePath, 'storage/app/native-build') ||
                 Str::startsWith($relativePath, 'bootstrap/cache/') ||
-                Str::startsWith($relativePath, 'nativephp') ||
-                Str::startsWith($relativePath, 'public/storage') ||
+                Str::startsWith($relativePath, '.idea') ||
                 Str::endsWith($relativePath, '.jks') ||
                 Str::endsWith($relativePath, '.zip')) {
                 continue;
