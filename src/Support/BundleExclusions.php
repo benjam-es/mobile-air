@@ -61,6 +61,14 @@ class BundleExclusions
         '*.neon.dist',
     ];
 
+    /** Directories the Android runtime expects to exist (added as empty dirs in zip). */
+    public const ANDROID_REQUIRED_DIRS = [
+        'bootstrap/cache',
+        'storage/framework/cache',
+        'storage/framework/sessions',
+        'storage/framework/views',
+    ];
+
     /** Specific vendor paths to exclude. */
     public const VENDOR_PATHS = [
         'vendor/nativephp/mobile/resources',

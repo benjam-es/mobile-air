@@ -7,41 +7,6 @@ use Illuminate\Support\Facades\File;
 trait PlatformFileOperations
 {
     /**
-     * Platform-optimized file copy operation
-     */
-    protected function platformOptimizedCopy(string $source, string $destination, array $excludedDirs = []): void
-    {
-        if (PHP_OS_FAMILY === 'Windows') {
-            // Use robocopy on Windows
-            if (! empty($excludedDirs)) {
-                $excludeArgs = '';
-                foreach ($excludedDirs as $dir) {
-                    $excludeArgs .= " /XD \"{$source}\\{$dir}\"";
-                }
-                $cmd = "robocopy \"{$source}\" \"{$destination}\" /MIR /NFL /NDL /NJH /NJS /NP /R:0 /W:0{$excludeArgs}";
-            } else {
-                $cmd = "xcopy \"{$source}\\*\" \"{$destination}\\\" /E /I /Y /Q";
-            }
-
-            exec($cmd, $output, $result);
-
-            // Robocopy returns 0-7 as success codes
-            if ($result >= 8 && strpos($cmd, 'robocopy') !== false) {
-                $this->components->warn("robocopy failed with exit code $result");
-            }
-        } else {
-            // Use rsync on Unix-like systems
-            if (! empty($excludedDirs)) {
-                $excludeFlags = implode(' ', array_map(fn ($d) => "--exclude='{$d}'", $excludedDirs));
-                $cmd = "rsync -aL {$excludeFlags} \"{$source}/\" \"{$destination}/\"";
-            } else {
-                $cmd = "cp -a \"{$source}/.\" \"{$destination}/\"";
-            }
-            exec($cmd);
-        }
-    }
-
-    /**
      * Platform-optimized directory removal
      */
     protected function removeDirectory(string $directory): void

@@ -5,6 +5,8 @@ namespace Native\Mobile\Traits;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Str;
+use Native\Mobile\Support\BundleExclusions;
+use Native\Mobile\Support\BundleFileManager;
 use Symfony\Component\Process\Process as SymfonyProcess;
 
 trait PreparesBuild
@@ -225,21 +227,12 @@ trait PreparesBuild
                 unlink($destinationZip);
             }
 
-            $excludedDirs = $this->getExcludedPaths();
-
-            // Respect export-ignore from vendor package .gitattributes files
-            foreach ($this->loadVendorExportIgnorePatterns($source) as $prefix => $patterns) {
-                foreach ($patterns as $pattern) {
-                    $excludedDirs[] = $prefix.ltrim($pattern, '/');
-                }
-            }
-
-            $this->logToFile('  Excluded directories: '.implode(', ', $excludedDirs));
+            $configExcludes = config('nativephp.cleanup_exclude_files', []);
 
             $srcDir = base_path('vendor/nativephp/mobile/bootstrap/android');
 
             $this->logToFile('  Copying Laravel source...');
-            $this->components->task('Copying Laravel source', fn () => $this->platformOptimizedCopy($source, $tempDir, $excludedDirs));
+            $this->components->task('Copying Laravel source', fn () => BundleFileManager::copy($source, $tempDir, $configExcludes));
 
             $composerArgs = $excludeDevDependencies ? '--no-dev --no-interaction' : '--no-interaction';
 
@@ -271,6 +264,9 @@ trait PreparesBuild
                 return $result->successful();
             });
 
+            $this->logToFile('  Removing unnecessary files...');
+            $this->components->task('Removing unnecessary files', fn () => BundleFileManager::removeUnnecessaryFiles($tempDir, $configExcludes));
+
             $version = config('nativephp.version', now()->format('Ymd-His'));
             $versionCode = config('nativephp.version_code', 1);
             $bundleVersionId = $version === 'DEBUG' ? 'DEBUG' : "{$version}b{$versionCode}";
@@ -291,7 +287,7 @@ trait PreparesBuild
             }
 
             $this->logToFile('  Creating bundle archive...');
-            $this->components->task('Creating bundle archive', fn () => $this->createZipBundle($tempDir, $destinationZip, $excludedDirs));
+            $this->components->task('Creating bundle archive', fn () => $this->createZipBundle($tempDir, $destinationZip));
 
             if (! file_exists($destinationZip) || filesize($destinationZip) <= 1000) {
                 $this->logToFile('ERROR: Failed to create valid zip file');
@@ -328,132 +324,9 @@ trait PreparesBuild
     }
 
     /**
-     * Paths to exclude from the app bundle.
-     *
-     * Patterns without a leading / match at any depth (e.g. inside vendor packages).
-     * Patterns with a leading / are anchored to the project root.
-     * Used by rsync during the initial copy step.
-     */
-    protected function getExcludedPaths(): array
-    {
-        // Any depth (project root + inside vendor packages)
-        $excludes = [
-            '.git',
-            '.github',
-            'node_modules',
-            'tests',
-            '.DS_Store',
-            '.gitignore',
-            '.gitattributes',
-            '.gitkeep',
-            '.editorconfig',
-
-            // Non-runtime files inside vendor packages
-            '*.md',
-            'LICENSE*',
-            'docs',
-            '*.yml',
-            '*.yaml',
-            '*.neon',
-            '*.neon.dist',
-
-            // Vendor-specific
-            'vendor/nativephp/mobile/resources',
-            'vendor/*/*/vendor',
-            'vendor/livewire/livewire/src/Features/SupportFileUploads/browser_test_image_big.jpg',
-        ];
-
-        // Platform-specific project-level excludes
-        if (PHP_OS_FAMILY === 'Windows') {
-            $excludes[] = '/nativephp';
-        } else {
-            $excludes[] = '/nativephp/ios';
-            $excludes[] = '/nativephp/android';
-        }
-
-        // Project-level directories
-        $excludes = array_merge($excludes, [
-            '/output',
-            '/build',
-            '/dist',
-            '/artifacts',
-            '/storage/logs',
-            '/storage/framework',
-            '/public/storage',
-        ]);
-
-        // Project-level files
-        $excludes = array_merge($excludes, [
-            '/*.js',
-            '/*.md',
-            '/*.lock',
-            '/*.xml',
-            '/.env.example',
-            '/artisan',
-        ]);
-
-        // User-configured exclusions
-        $excludes = array_merge($excludes, config('nativephp.cleanup_exclude_files', []));
-
-        return $excludes;
-    }
-
-    /**
-     * Load export-ignore patterns from .gitattributes in vendor packages.
-     *
-     * @return array<string, string[]>
-     */
-    protected function loadVendorExportIgnorePatterns(string $source): array
-    {
-        $patterns = [];
-        $vendorPath = $source.'/vendor/';
-
-        if (! is_dir($vendorPath)) {
-            return $patterns;
-        }
-
-        foreach (new \DirectoryIterator($vendorPath) as $namespace) {
-            if ($namespace->isDot() || ! $namespace->isDir()) {
-                continue;
-            }
-
-            foreach (new \DirectoryIterator($namespace->getPathname()) as $package) {
-                if ($package->isDot() || ! $package->isDir()) {
-                    continue;
-                }
-
-                $gitattributes = $package->getPathname().'/.gitattributes';
-                if (! file_exists($gitattributes)) {
-                    continue;
-                }
-
-                $ignores = [];
-                foreach (file($gitattributes, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
-                    $line = trim($line);
-                    if ($line === '' || $line[0] === '#' || ! str_contains($line, 'export-ignore')) {
-                        continue;
-                    }
-
-                    $path = trim(preg_split('/\s+/', $line, 2)[0] ?? '');
-                    if ($path !== '') {
-                        $ignores[] = ltrim($path, '/');
-                    }
-                }
-
-                if (! empty($ignores)) {
-                    $prefix = 'vendor/'.$namespace->getFilename().'/'.$package->getFilename().'/';
-                    $patterns[$prefix] = $ignores;
-                }
-            }
-        }
-
-        return $patterns;
-    }
-
-    /**
      * Create ZIP bundle with cross-platform support
      */
-    protected function createZipBundle(string $source, string $destination, array $excludedDirs = []): void
+    protected function createZipBundle(string $source, string $destination): void
     {
         if (PHP_OS_FAMILY === 'Windows') {
             $sevenZip = config('nativephp.android.7zip-location');
@@ -480,16 +353,9 @@ trait PreparesBuild
             exit(1);
         }
 
-        $this->addDirectoryToZip($zip, $source, '', $excludedDirs);
+        $this->addDirectoryToZip($zip, $source);
 
-        $requiredDirs = [
-            'bootstrap/cache',
-            'storage/framework/cache',
-            'storage/framework/sessions',
-            'storage/framework/views',
-        ];
-
-        foreach ($requiredDirs as $dir) {
+        foreach (BundleExclusions::ANDROID_REQUIRED_DIRS as $dir) {
             if (! $zip->statName($dir)) {
                 $zip->addEmptyDir($dir);
             }
@@ -505,7 +371,7 @@ trait PreparesBuild
     /**
      * Add directory contents to ZIP archive
      */
-    protected function addDirectoryToZip(\ZipArchive $zip, string $source, string $prefix = '', array $excludedDirs = []): void
+    protected function addDirectoryToZip(\ZipArchive $zip, string $source, string $prefix = ''): void
     {
         $source = rtrim(str_replace('\\', '/', $source), '/').'/';
 
@@ -518,32 +384,8 @@ trait PreparesBuild
             $filePath = str_replace('\\', '/', $file->getRealPath());
             $relativePath = ltrim(str_replace('\\', '/', substr($filePath, strlen($source))), '/');
 
-            // Check against configured exclusions first
-            $shouldExclude = false;
-            foreach ($excludedDirs as $excludedDir) {
-                // Handle wildcard patterns (e.g., "public/fonts/*")
-                if (str_contains($excludedDir, '*')) {
-                    $pattern = str_replace('*', '.*', preg_quote($excludedDir, '/'));
-                    if (preg_match('/^'.$pattern.'/', $relativePath)) {
-                        $shouldExclude = true;
-                        break;
-                    }
-                } else {
-                    // Exact directory matching
-                    if (Str::startsWith($relativePath, rtrim($excludedDir, '/').'/') || $relativePath === rtrim($excludedDir, '/')) {
-                        $shouldExclude = true;
-                        break;
-                    }
-                }
-            }
-
-            // Safety net for files that may be created between rsync and zip
-            if ($shouldExclude ||
-                Str::startsWith($relativePath, 'storage/framework/views/') ||
-                Str::startsWith($relativePath, 'storage/framework/cache/') ||
-                Str::startsWith($relativePath, 'storage/framework/sessions/') ||
-                Str::startsWith($relativePath, 'storage/app/native-build') ||
-                Str::startsWith($relativePath, 'bootstrap/cache/') ||
+            // Safety net for files that may be created between copy/cleanup and zip
+            if (Str::startsWith($relativePath, 'bootstrap/cache/') ||
                 Str::startsWith($relativePath, '.idea') ||
                 Str::endsWith($relativePath, '.jks') ||
                 Str::endsWith($relativePath, '.zip')) {
@@ -1024,6 +866,4 @@ trait PreparesBuild
     abstract protected function updateFirebaseConfiguration(): void;
 
     abstract protected function removeDirectory(string $path): void;
-
-    abstract protected function platformOptimizedCopy(string $source, string $destination, array $excludedDirs): void;
 }
