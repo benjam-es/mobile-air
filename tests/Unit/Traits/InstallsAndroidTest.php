@@ -3,6 +3,7 @@
 namespace Tests\Unit\Traits;
 
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Process;
 use Mockery;
 use Native\Mobile\Traits\InstallsAndroid;
 use Orchestra\Testbench\TestCase;
@@ -57,6 +58,8 @@ class InstallsAndroidTest extends TestCase
 
     public function test_create_android_studio_project_copies_boilerplate()
     {
+        Process::fake(['rsync*' => Process::result()]);
+
         // Create mock vendor directory with boilerplate
         $vendorPath = $this->testProjectPath.'/vendor/nativephp/mobile/resources/androidstudio';
         File::makeDirectory($vendorPath, 0755, true);
@@ -67,16 +70,21 @@ class InstallsAndroidTest extends TestCase
         // Execute
         $this->createAndroidStudioProject();
 
-        // Assert files were copied
+        // Assert rsync was called to copy the boilerplate
         $androidPath = $this->testProjectPath.'/nativephp/android';
         $this->assertDirectoryExists($androidPath);
-        $this->assertFileExists($androidPath.'/build.gradle');
-        $this->assertFileExists($androidPath.'/app/build.gradle.kts');
-        $this->assertEquals('test content', File::get($androidPath.'/build.gradle'));
+
+        Process::assertRan(function ($process) use ($vendorPath, $androidPath) {
+            return str_contains($process->command, 'rsync')
+                && str_contains($process->command, $vendorPath)
+                && str_contains($process->command, $androidPath);
+        });
     }
 
     public function test_create_android_studio_project_with_force_removes_existing()
     {
+        Process::fake(['rsync*' => Process::result()]);
+
         // Create existing android directory
         $androidPath = $this->testProjectPath.'/nativephp/android';
         File::makeDirectory($androidPath, 0755, true);
@@ -93,9 +101,14 @@ class InstallsAndroidTest extends TestCase
         // Execute
         $this->createAndroidStudioProject();
 
-        // Assert old file was removed and new file exists
+        // Assert old file was removed (cleanDirectory is called before rsync)
         $this->assertFileDoesNotExist($androidPath.'/existing.txt');
-        $this->assertFileExists($androidPath.'/new.txt');
+
+        Process::assertRan(function ($process) use ($vendorPath, $androidPath) {
+            return str_contains($process->command, 'rsync')
+                && str_contains($process->command, $vendorPath)
+                && str_contains($process->command, $androidPath);
+        });
     }
 
     public function test_install_php_android_with_icu_lock()

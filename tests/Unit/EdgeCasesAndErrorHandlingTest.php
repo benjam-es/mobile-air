@@ -3,6 +3,8 @@
 namespace Tests\Unit;
 
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Process;
+use Native\Mobile\Support\BundleFileManager;
 use Native\Mobile\Traits\InstallsAndroid;
 use Native\Mobile\Traits\PlatformFileOperations;
 use Native\Mobile\Traits\RunsAndroid;
@@ -287,12 +289,13 @@ class EdgeCasesAndErrorHandlingTest extends TestCase
         symlink($dir2, $dir1.'/link_to_dir2');
         symlink($dir1, $dir2.'/link_to_dir1');
 
-        // Try to copy - should not hang
+        // Try to copy - rsync handles circular symlinks gracefully
+        Process::fake(['rsync*' => Process::result()]);
         $dest = $this->testProjectPath.'/dest';
-        $this->platformOptimizedCopy($dir1, $dest);
+        BundleFileManager::copyRaw($dir1, $dest);
 
         // If we get here, it didn't hang
-        $this->assertTrue(true);
+        Process::assertRan(fn ($process) => str_contains($process->command, 'rsync'));
     }
 
     public function test_handles_network_paths()

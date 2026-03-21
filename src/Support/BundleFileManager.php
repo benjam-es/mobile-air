@@ -68,6 +68,33 @@ class BundleFileManager
         }
     }
 
+    /**
+     * Copy a source directory to a destination without applying any exclusions.
+     * Useful for copying templates and binary artifacts that should be transferred as-is.
+     */
+    public static function copyRaw(string $source, string $destination): void
+    {
+        $source = rtrim($source, '/');
+        $destination = rtrim($destination, '/');
+
+        File::ensureDirectoryExists($destination);
+        File::cleanDirectory($destination);
+
+        if (PHP_OS_FAMILY === 'Windows') {
+            $result = Process::run("robocopy \"{$source}\" \"{$destination}\" /MIR /NFL /NDL /NJH /NJS /NP /R:0 /W:0");
+
+            if ($result->exitCode() >= 8) {
+                throw new \Exception('Failed to copy directory (robocopy exit code '.$result->exitCode().')');
+            }
+        } else {
+            $result = Process::run("rsync -a --copy-links \"{$source}/\" \"{$destination}/\"");
+
+            if (! $result->successful()) {
+                throw new \Exception('Failed to copy directory: '.$result->errorOutput());
+            }
+        }
+    }
+
     private static function copyWithRsync(string $source, string $destination, array $configPaths): void
     {
         $excludes = self::excludes($configPaths, $source);

@@ -3,6 +3,8 @@
 namespace Tests\Unit\Traits;
 
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Process;
+use Native\Mobile\Support\BundleFileManager;
 use Native\Mobile\Traits\PlatformFileOperations;
 use Orchestra\Testbench\TestCase;
 
@@ -35,29 +37,30 @@ class PlatformFileOperationsTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_platform_optimized_copy_copies_files()
+    public function test_copy_raw_copies_files()
     {
+        Process::fake(['rsync*' => Process::result()]);
+
         // Create test files
         File::put($this->testSourceDir.'/file1.txt', 'content1');
         File::put($this->testSourceDir.'/file2.txt', 'content2');
         File::makeDirectory($this->testSourceDir.'/subdir');
         File::put($this->testSourceDir.'/subdir/file3.txt', 'content3');
 
-        // Execute copy
-        $this->platformOptimizedCopy($this->testSourceDir, $this->testDestDir);
+        BundleFileManager::copyRaw($this->testSourceDir, $this->testDestDir);
 
-        // Assert files were copied
-        $this->assertFileExists($this->testDestDir.'/file1.txt');
-        $this->assertFileExists($this->testDestDir.'/file2.txt');
-        $this->assertFileExists($this->testDestDir.'/subdir/file3.txt');
-
-        $this->assertEquals('content1', File::get($this->testDestDir.'/file1.txt'));
-        $this->assertEquals('content2', File::get($this->testDestDir.'/file2.txt'));
-        $this->assertEquals('content3', File::get($this->testDestDir.'/subdir/file3.txt'));
+        Process::assertRan(function ($process) {
+            return str_contains($process->command, 'rsync -a --copy-links')
+                && str_contains($process->command, $this->testSourceDir)
+                && str_contains($process->command, $this->testDestDir)
+                && ! str_contains($process->command, '--exclude');
+        });
     }
 
-    public function test_platform_optimized_copy_with_excluded_dirs()
+    public function test_copy_with_exclusions()
     {
+        Process::fake(['rsync*' => Process::result()]);
+
         // Create test files
         File::put($this->testSourceDir.'/file1.txt', 'content1');
         File::makeDirectory($this->testSourceDir.'/node_modules');
@@ -65,13 +68,13 @@ class PlatformFileOperationsTest extends TestCase
         File::makeDirectory($this->testSourceDir.'/.git');
         File::put($this->testSourceDir.'/.git/config', 'git config');
 
-        // Execute copy with exclusions
-        $this->platformOptimizedCopy($this->testSourceDir, $this->testDestDir, ['node_modules', '.git']);
+        BundleFileManager::copy($this->testSourceDir, $this->testDestDir);
 
-        // Assert excluded directories were not copied
-        $this->assertFileExists($this->testDestDir.'/file1.txt');
-        $this->assertDirectoryDoesNotExist($this->testDestDir.'/node_modules');
-        $this->assertDirectoryDoesNotExist($this->testDestDir.'/.git');
+        Process::assertRan(function ($process) {
+            return str_contains($process->command, 'rsync')
+                && str_contains($process->command, "--exclude='node_modules'")
+                && str_contains($process->command, "--exclude='.git'");
+        });
     }
 
     public function test_remove_directory_removes_directory()

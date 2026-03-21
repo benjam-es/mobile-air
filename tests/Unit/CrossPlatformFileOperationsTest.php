@@ -3,6 +3,8 @@
 namespace Tests\Unit;
 
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Process;
+use Native\Mobile\Support\BundleFileManager;
 use Native\Mobile\Traits\PlatformFileOperations;
 use Tests\TestCase;
 
@@ -30,6 +32,7 @@ class CrossPlatformFileOperationsTest extends TestCase
      */
     public function test_file_operations_on_different_platforms($platform, $expectedCommand)
     {
+        Process::fake(['rsync*' => Process::result(), 'robocopy*' => Process::result()]);
         $this->mockOperatingSystem($platform);
 
         $source = $this->testDir.'/source';
@@ -38,13 +41,9 @@ class CrossPlatformFileOperationsTest extends TestCase
         File::makeDirectory($source);
         File::put($source.'/test.txt', 'content');
 
-        // We can't actually test the exec() commands without executing them
-        // So we'll test that the method runs without errors
-        $this->platformOptimizedCopy($source, $dest);
+        BundleFileManager::copyRaw($source, $dest);
 
-        // The actual copy might not work in test environment
-        // but we can verify the method executed without throwing
-        $this->assertTrue(true);
+        Process::assertRan(fn ($process) => str_contains($process->command, 'rsync') || str_contains($process->command, 'robocopy'));
     }
 
     public static function platformProvider(): array
@@ -103,26 +102,23 @@ class CrossPlatformFileOperationsTest extends TestCase
 
     public function test_file_operations_with_special_characters()
     {
+        Process::fake(['rsync*' => Process::result()]);
+
         $source = $this->testDir.'/source with spaces';
         $dest = $this->testDir.'/dest with spaces';
 
         File::makeDirectory($source);
         File::put($source.'/file with spaces.txt', 'content');
 
-        // Test copy with spaces in path
-        $this->platformOptimizedCopy($source, $dest);
+        BundleFileManager::copyRaw($source, $dest);
 
-        // Manual verification since exec might not work in test
-        if (File::exists($dest.'/file with spaces.txt')) {
-            $this->assertFileExists($dest.'/file with spaces.txt');
-        } else {
-            // If exec didn't work, at least verify no exception was thrown
-            $this->assertTrue(true);
-        }
+        Process::assertRan(fn ($process) => str_contains($process->command, 'source with spaces'));
     }
 
     public function test_exclusion_handling_across_platforms()
     {
+        Process::fake(['rsync*' => Process::result()]);
+
         $source = $this->testDir.'/source';
         $dest = $this->testDir.'/dest';
 
@@ -135,12 +131,14 @@ class CrossPlatformFileOperationsTest extends TestCase
         File::put($source.'/.git/config', 'git config');
         File::put($source.'/src/index.php', '<?php');
 
-        // Test with exclusions
-        $this->platformOptimizedCopy($source, $dest, ['node_modules', '.git']);
+        // Test copy with bundle exclusions applied
+        BundleFileManager::copy($source, $dest);
 
-        // The actual exclusion might not work with exec in tests
-        // but we verify the method handles exclusions without errors
-        $this->assertTrue(true);
+        Process::assertRan(function ($process) {
+            return str_contains($process->command, 'rsync')
+                && str_contains($process->command, "--exclude='node_modules'")
+                && str_contains($process->command, "--exclude='.git'");
+        });
     }
 
     /**

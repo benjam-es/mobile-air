@@ -5,6 +5,7 @@ namespace Native\Mobile\Traits;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\RequestException;
 use Illuminate\Support\Facades\File;
+use Native\Mobile\Support\BundleFileManager;
 use ZipArchive;
 
 use function Laravel\Prompts\error;
@@ -53,7 +54,7 @@ trait InstallsAndroid
 
         $source = base_path('vendor/nativephp/mobile/resources/androidstudio');
 
-        $this->components->task('Creating Android project', fn () => $this->platformOptimizedCopy($source, $androidPath));
+        $this->components->task('Creating Android project', fn () => BundleFileManager::copyRaw($source, $androidPath));
     }
 
     private function installPHPAndroid(): void
@@ -197,7 +198,7 @@ trait InstallsAndroid
         $destination = base_path('nativephp/android/app/src/main');
         File::ensureDirectoryExists($destination);
 
-        $this->components->task('Installing Android libraries', fn () => $this->platformOptimizedCopy($extractPath, $destination));
+        $this->components->task('Installing Android libraries', fn () => BundleFileManager::copyRaw($extractPath, $destination));
 
         try {
             $this->removeDirectory($extractPath);
