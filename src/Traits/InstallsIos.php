@@ -6,6 +6,7 @@ use GuzzleHttp\Client;
 use GuzzleHttp\Exception\RequestException;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
+use Native\Mobile\Support\BundleFileManager;
 use ZipArchive;
 
 use function Laravel\Prompts\error;
@@ -49,7 +50,7 @@ trait InstallsIos
             mkdir($this->iosPath, 0755, true);
         }
 
-        $this->components->task('Creating Xcode project', fn () => File::copyDirectory(
+        $this->components->task('Creating Xcode project', fn () => BundleFileManager::copyRaw(
             base_path('vendor/nativephp/mobile/resources/xcode'),
             $this->iosPath
         ));
@@ -164,8 +165,8 @@ trait InstallsIos
         File::ensureDirectoryExists($this->iosPath);
 
         $this->components->task('Installing iOS libraries', function () use ($extractPath) {
-            File::copyDirectory($extractPath.'/Libraries', $this->iosPath.'/Libraries');
-            File::copyDirectory($extractPath.'/Include', $this->iosPath.'/Include');
+            BundleFileManager::copyRaw($extractPath.'/Libraries', $this->iosPath.'/Libraries');
+            BundleFileManager::copyRaw($extractPath.'/Include', $this->iosPath.'/Include');
         });
 
         // Re-copy our custom Bridge files (PHP.c, PHP.h) which contain the persistent
@@ -173,7 +174,7 @@ trait InstallsIos
         $bridgeSrc = __DIR__.'/../../resources/xcode/Include/Bridge';
         $bridgeDst = $this->iosPath.'/Include/Bridge';
         if (is_dir($bridgeSrc)) {
-            File::copyDirectory($bridgeSrc, $bridgeDst);
+            BundleFileManager::copyRaw($bridgeSrc, $bridgeDst);
         }
 
         try {

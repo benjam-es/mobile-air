@@ -78,7 +78,6 @@ class BundleFileManager
         $destination = rtrim($destination, '/');
 
         File::ensureDirectoryExists($destination);
-        File::cleanDirectory($destination);
 
         if (PHP_OS_FAMILY === 'Windows') {
             $result = Process::run("robocopy \"{$source}\" \"{$destination}\" /MIR /NFL /NDL /NJH /NJS /NP /R:0 /W:0");
