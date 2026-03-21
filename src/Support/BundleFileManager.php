@@ -61,10 +61,12 @@ class BundleFileManager
         File::ensureDirectoryExists($destination);
         File::cleanDirectory($destination);
 
+        $excludes = self::excludes($configPaths, $source);
+
         if (PHP_OS_FAMILY === 'Windows') {
-            self::copyWithRobocopy($source, $destination, $configPaths);
+            self::copyWithRobocopy($source, $destination, $excludes);
         } else {
-            self::copyWithRsync($source, $destination, $configPaths);
+            self::copyWithRsync($source, $destination, $excludes);
         }
     }
 
@@ -80,38 +82,31 @@ class BundleFileManager
         File::ensureDirectoryExists($destination);
 
         if (PHP_OS_FAMILY === 'Windows') {
-            $result = Process::run("robocopy \"{$source}\" \"{$destination}\" /MIR /NFL /NDL /NJH /NJS /NP /R:0 /W:0");
-
-            if ($result->exitCode() >= 8) {
-                throw new \Exception('Failed to copy directory (robocopy exit code '.$result->exitCode().')');
-            }
+            self::copyWithRobocopy($source, $destination);
         } else {
-            $result = Process::run("rsync -a --copy-links \"{$source}/\" \"{$destination}/\"");
-
-            if (! $result->successful()) {
-                throw new \Exception('Failed to copy directory: '.$result->errorOutput());
-            }
+            self::copyWithRsync($source, $destination);
         }
     }
 
-    private static function copyWithRsync(string $source, string $destination, array $configPaths): void
+    private static function copyWithRsync(string $source, string $destination, array $excludes = []): void
     {
-        $excludes = self::excludes($configPaths, $source);
-        $excludeFlags = implode(' ', array_map(fn ($d) => "--exclude='".str_replace("'", "'\\''", $d)."'", $excludes));
+        $excludeFlags = '';
 
-        $result = Process::run("rsync -a --copy-links {$excludeFlags} \"{$source}/\" \"{$destination}/\"");
+        if (! empty($excludes)) {
+            $excludeFlags = implode(' ', array_map(fn ($d) => "--exclude='".str_replace("'", "'\\''", $d)."'", $excludes)).' ';
+        }
+
+        $result = Process::run("rsync -a --copy-links {$excludeFlags}\"{$source}/\" \"{$destination}/\"");
 
         if (! $result->successful()) {
-            throw new \Exception('Failed to copy app bundle: '.$result->errorOutput());
+            throw new \Exception('Failed to copy directory: '.$result->errorOutput());
         }
     }
 
-    private static function copyWithRobocopy(string $source, string $destination, array $configPaths): void
+    private static function copyWithRobocopy(string $source, string $destination, array $excludes = []): void
     {
-        $excludes = self::excludes($configPaths, $source);
-
-        // Robocopy uses /XD for directories with absolute paths
         $excludeArgs = '';
+
         foreach ($excludes as $pattern) {
             $dir = ltrim($pattern, '/\\');
             $dir = str_replace('/', '\\', $dir);
@@ -122,7 +117,7 @@ class BundleFileManager
 
         // Robocopy exit codes < 8 are success
         if ($result->exitCode() >= 8) {
-            throw new \Exception('Failed to copy app bundle (robocopy exit code '.$result->exitCode().')');
+            throw new \Exception('Failed to copy directory (robocopy exit code '.$result->exitCode().')');
         }
     }
 

@@ -152,7 +152,7 @@ class IosBuildCopyTest extends TestCase
         $appPath = $this->fakeRsyncAndGetAppPath(exitCode: 1);
 
         $this->expectException(\Exception::class);
-        $this->expectExceptionMessage('Failed to copy app bundle');
+        $this->expectExceptionMessage('Failed to copy directory');
 
         BundleFileManager::copy(base_path(), $appPath);
     }
