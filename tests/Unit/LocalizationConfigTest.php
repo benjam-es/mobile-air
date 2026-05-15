@@ -113,9 +113,6 @@ class LocalizationConfigTest extends TestCase
         $this->assertEquals(1, substr_count(File::get($this->manifestPath()), 'android:localeConfig'));
     }
 
-    /**
-     * Helper methods
-     */
     private function manifestPath(): string
     {
         return $this->testProjectPath.'/nativephp/android/app/src/main/AndroidManifest.xml';
