@@ -13,6 +13,7 @@ import com.nativephp.mobile.security.LaravelCookieStore
 class PHPBridge(private val context: Context) {
     private var lastPostData: String? = null
     private val requestDataMap = ConcurrentHashMap<String, String>()
+    private val postDataByKey = ConcurrentHashMap<String, String>()
     private val phpExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     private val nativePhpScript: String
@@ -57,11 +58,17 @@ class PHPBridge(private val context: Context) {
     ): String
     external fun nativePersistentArtisan(command: String): String
     external fun nativePersistentShutdown()
+    external fun nativePersistentReboot(): Int
 
     // Worker (background queue) JNI methods — runs on a separate thread with its own TSRM context
     external fun nativeWorkerBoot(bootstrapPath: String): Int
     external fun nativeWorkerArtisan(command: String): String
     external fun nativeWorkerShutdown()
+
+    // Ephemeral runtime JNI methods — generic background TSRM context for plugin use
+    external fun nativeEphemeralBoot(bootstrapPath: String): Int
+    external fun nativeEphemeralArtisan(command: String): String
+    external fun nativeEphemeralShutdown()
 
     @Volatile
     private var runtimeInitialized = false
@@ -144,6 +151,31 @@ class PHPBridge(private val context: Context) {
     }
 
     fun isPersistentMode(): Boolean = persistentMode && persistentBooted
+
+    /**
+     * Reboot the persistent runtime without restarting the PHP interpreter.
+     * Flushes the Laravel app, clears opcache and compiled views, then re-bootstraps.
+     * Used by hot reload to pick up file changes while keeping persistent mode speed.
+     */
+    fun rebootPersistentRuntime(): Boolean {
+        if (!persistentBooted) {
+            Log.w(TAG, "Cannot reboot — persistent runtime not booted")
+            return false
+        }
+        val future = phpExecutor.submit<Boolean> {
+            val start = System.currentTimeMillis()
+            val result = nativePersistentReboot()
+            val elapsed = System.currentTimeMillis() - start
+            if (result == 0) {
+                Log.i(TAG, "Persistent runtime rebooted in ${elapsed}ms")
+                true
+            } else {
+                Log.e(TAG, "Persistent runtime reboot failed (code=$result) after ${elapsed}ms")
+                false
+            }
+        }
+        return future.get()
+    }
 
     /**
      * Boot the worker PHP runtime on a dedicated TSRM context.
@@ -282,6 +314,35 @@ class PHPBridge(private val context: Context) {
         if (keysToRemove.isNotEmpty()) {
             Log.d(TAG, "Cleaned up ${keysToRemove.size} old request entries")
         }
+    }
+
+    fun storePostData(key: String, data: String) {
+        postDataByKey[key] = data
+        Log.d(TAG, "Stored POST data for key=$key (length=${data.length})")
+    }
+
+    fun consumePostData(key: String): String? {
+        // Try immediate lookup
+        var data = postDataByKey.remove(key)
+
+        // If not found, the JS bridge may not have fired yet — wait briefly
+        if (data == null) {
+            for (i in 1..10) {
+                Thread.sleep(5)
+                data = postDataByKey.remove(key)
+                if (data != null) {
+                    Log.d(TAG, "POST data for key=$key arrived after ${i * 5}ms wait")
+                    break
+                }
+            }
+        }
+
+        if (data != null) {
+            Log.d(TAG, "Consumed POST data for key=$key (length=${data.length})")
+        } else {
+            Log.w(TAG, "No POST data for key=$key after 50ms — request may have no body")
+        }
+        return data
     }
 
     fun getLastPostData(): String? {

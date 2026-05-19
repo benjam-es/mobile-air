@@ -88,7 +88,8 @@ trait InstallsIos
             return;
         }
 
-        $this->components->twoColumnDetail('PHP version', $phpVersion.'.x');
+        $fullVersion = $versions['versions'][$phpVersion]['php_version'] ?? $phpVersion;
+        $this->components->twoColumnDetail('PHP version', $fullVersion);
         $this->components->twoColumnDetail('ICU support', $includeIcu ? 'Enabled' : 'Disabled');
 
         $cacheDir = base_path('nativephp/binaries');
@@ -173,14 +174,6 @@ trait InstallsIos
         $bridgeDst = $this->iosPath.'/Include/Bridge';
         if (is_dir($bridgeSrc)) {
             File::copyDirectory($bridgeSrc, $bridgeDst);
-        }
-
-        // Store ICU preference for run command
-        $icuFlagFile = base_path('nativephp/ios/.icu-enabled');
-        if ($includeIcu) {
-            File::put($icuFlagFile, '1');
-        } elseif (File::exists($icuFlagFile)) {
-            File::delete($icuFlagFile);
         }
 
         try {

@@ -36,7 +36,18 @@ final class DeepLinkRouter {
     func handle(url: URL) {
         DebugLogger.shared.log("🔗 DeepLinkRouter.handle() called with: \(url)")
         DebugLogger.shared.log("🔗 Current state - WebView ready: \(isWebViewReady), PHP ready: \(isPhpReady)")
-        
+
+        // Guard: DeepLinkRouter only handles deep links (custom URL schemes and universal links).
+        // File URLs are delivered to the app when CFBundleDocumentTypes / LSSupportsOpeningDocumentsInPlace
+        // are declared (e.g. when the user picks the app from another app's share sheet or "Open In…").
+        // Without this guard, the file path is treated as a Laravel route and the WebView displays
+        // a 404 like "route /private/var/mobile/.../filename.pdf could not be found". Plugins that
+        // declare document types are responsible for handling file URLs before they reach this router.
+        guard !url.isFileURL else {
+            DebugLogger.shared.log("🔗 Ignoring file URL — DeepLinkRouter only handles deep links: \(url)")
+            return
+        }
+
         // 1. Normalise the URL (strip scheme, keep host/path/query)
         var route = ""
 
@@ -67,10 +78,13 @@ final class DeepLinkRouter {
 
         DebugLogger.shared.log("🔗 Normalized to: \(newURLString)")
         
-        // 3. Either redirect immediately or store for later
+        // 3. Either navigate immediately or store for later
         if isWebViewReady && isPhpReady {
-            DebugLogger.shared.log("🔗 Both ready, redirecting immediately")
-            redirectToURL(newURLString)
+            // App is already running — use Inertia router for SPA navigation
+            // This prevents Inertia from returning raw JSON on subsequent navigations
+            // (e.g. second OAuth login after logout)
+            DebugLogger.shared.log("🔗 Both ready, navigating with Inertia")
+            navigateWithInertia(normalizedRoute)
         } else {
             DebugLogger.shared.log("🔗 Not ready, storing as pending URL")
             // Store the URL to handle once both WebView and PHP are ready
@@ -86,5 +100,19 @@ final class DeepLinkRouter {
             userInfo: ["url": urlString]
         )
         DebugLogger.shared.log("🔗 redirectToURL() notification posted successfully")
+    }
+
+    /// Navigate using Inertia router when the app is already running.
+    /// Uses the path (not the full php:// URL) so window.router.visit() works correctly.
+    private func navigateWithInertia(_ path: String) {
+        DebugLogger.shared.log("🔗 navigateWithInertia() posting notification for path: \(path)")
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .navigateWithInertiaNotification,
+                object: nil,
+                userInfo: ["path": path]
+            )
+        }
+        DebugLogger.shared.log("🔗 navigateWithInertia() notification posted")
     }
 }

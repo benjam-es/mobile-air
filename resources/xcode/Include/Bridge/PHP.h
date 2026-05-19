@@ -20,6 +20,7 @@ const char *persistent_php_dispatch(const char *method,
                                     const char *contentType);
 const char *persistent_php_artisan(const char *command);
 void persistent_php_shutdown(void);
+int  persistent_php_reboot(void);
 int  persistent_php_is_booted(void);
 void persistent_php_save_context(void);
 void persistent_php_restore_context(void);
@@ -30,10 +31,11 @@ const char *worker_php_artisan(const char *command);
 void worker_php_shutdown(void);
 int  worker_php_is_booted(void);
 
-// Scheduler Runtime (ephemeral TSRM context — boot/run/shutdown per invocation)
-int  scheduler_php_boot(const char *bootstrapPath);
-const char *scheduler_php_artisan(const char *command);
-void scheduler_php_shutdown(void);
-int  scheduler_php_is_booted(void);
+// Ephemeral PHP Runtime (generic TSRM context — boot/run/shutdown per invocation)
+// Used by plugins that need independent background PHP execution.
+int  ephemeral_php_boot(const char *bootstrapPath);
+const char *ephemeral_php_artisan(const char *command);
+void ephemeral_php_shutdown(void);
+int  ephemeral_php_is_booted(void);
 
 #endif

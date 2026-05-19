@@ -807,7 +807,8 @@ class BuildIosAppCommand extends Command
         $result = Process::run($command);
 
         if (! $result->successful()) {
-            throw new \Exception('Failed to create ZIP file');
+            $error = trim($result->errorOutput()) ?: trim($result->output());
+            throw new \Exception('Failed to create ZIP file: '.($error ?: 'exit code '.$result->exitCode()));
         }
 
         $this->createBundledVersionFile($zipPath);
@@ -817,11 +818,12 @@ class BuildIosAppCommand extends Command
 
     private function createBundledVersionFile(string $zipPath): void
     {
-        // Get version from Laravel config
         $appVersion = config('nativephp.version', 'DEBUG');
+        $versionCode = config('nativephp.version_code', 1);
+        $bundleVersionId = $appVersion === 'DEBUG' ? 'DEBUG' : "{$appVersion}b{$versionCode}";
 
         $versionFilePath = dirname($zipPath).'/bundled.version';
-        file_put_contents($versionFilePath, $appVersion);
+        file_put_contents($versionFilePath, $bundleVersionId);
 
         // Write bundle_meta.json for fast boot-time metadata reads (matches Android PreparesBuild)
         $bifrostAppId = null;
@@ -835,6 +837,7 @@ class BuildIosAppCommand extends Command
 
         $bundleMeta = json_encode([
             'version' => $appVersion,
+            'version_code' => $versionCode,
             'bifrost_app_id' => $bifrostAppId,
             'runtime_mode' => config('nativephp.runtime.mode', 'persistent'),
         ], JSON_PRETTY_PRINT);

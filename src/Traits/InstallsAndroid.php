@@ -96,7 +96,8 @@ trait InstallsAndroid
         $zipFile = $cacheDir.DIRECTORY_SEPARATOR.$zipFilename;
         $extractPath = storage_path('android-temp');
 
-        $this->components->twoColumnDetail('PHP version', $phpVersion.'.x');
+        $fullVersion = $versions['versions'][$phpVersion]['php_version'] ?? $phpVersion;
+        $this->components->twoColumnDetail('PHP version', $fullVersion);
         $this->components->twoColumnDetail('ICU support', $includeIcu ? 'Enabled' : 'Disabled');
 
         if (file_exists($zipFile)) {
@@ -197,14 +198,6 @@ trait InstallsAndroid
         File::ensureDirectoryExists($destination);
 
         $this->components->task('Installing Android libraries', fn () => $this->platformOptimizedCopy($extractPath, $destination));
-
-        // Store ICU preference for run command
-        $icuFlagFile = base_path('nativephp/android/.icu-enabled');
-        if ($includeIcu) {
-            File::put($icuFlagFile, '1');
-        } elseif (File::exists($icuFlagFile)) {
-            File::delete($icuFlagFile);
-        }
 
         try {
             $this->removeDirectory($extractPath);

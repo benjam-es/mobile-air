@@ -65,6 +65,7 @@ class BundleExclusions
     public const VENDOR_PATHS = [
         'vendor/nativephp/mobile/resources',
         'vendor/*/*/vendor',
+        'vendor/endroid',
         'vendor/laravel/pint/builds',
         'vendor/livewire/livewire/src/Features/SupportFileUploads/browser_test_image_big.jpg',
     ];

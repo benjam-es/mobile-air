@@ -299,6 +299,8 @@ class IOSPluginCompiler
             $this->iosProjectPath.'/NativePHP-simulator-Info.plist',
         ];
 
+        $appOverrides = $this->getAppInfoPlistOverrides();
+
         foreach ($plistPaths as $plistPath) {
             if (! $this->files->exists($plistPath)) {
                 continue;
@@ -322,8 +324,21 @@ class IOSPluginCompiler
                 }
             }
 
+            // Apply app-level overrides last so they always win over plugins.
+            if (! empty($appOverrides)) {
+                $plist = $this->injectPlistEntries($plist, $appOverrides);
+            }
+
             $this->files->put($plistPath, $plist);
         }
+    }
+
+    /**
+     * Read app-level Info.plist overrides from config('nativephp.permissions').
+     */
+    protected function getAppInfoPlistOverrides(): array
+    {
+        return config('nativephp.permissions', []);
     }
 
     /**
@@ -350,12 +365,12 @@ class IOSPluginCompiler
         foreach ($entries as $key => $value) {
             // Check if key already exists
             if (str_contains($plist, "<key>{$key}</key>")) {
-                // For array values, merge with existing array
                 if (is_array($value)) {
                     $plist = $this->mergeArrayEntry($plist, $key, $value);
+                } elseif (is_string($value)) {
+                    $plist = $this->updateStringEntry($plist, $key, $this->substituteEnvPlaceholders($value));
                 }
 
-                // Skip non-array values that already exist
                 continue;
             }
 
@@ -383,6 +398,18 @@ class IOSPluginCompiler
         }
 
         return $plist;
+    }
+
+    /**
+     * Update an existing string entry's value in the plist
+     */
+    protected function updateStringEntry(string $plist, string $key, string $value): string
+    {
+        $pattern = '/(<key>'.preg_quote($key, '/').'<\/key>\s*<string>)([^<]*)(<\/string>)/';
+
+        return preg_replace_callback($pattern, function ($matches) use ($value) {
+            return $matches[1].htmlspecialchars($value, ENT_XML1 | ENT_QUOTES, 'UTF-8').$matches[3];
+        }, $plist, 1);
     }
 
     /**
@@ -962,12 +989,38 @@ SECTION;
             return;
         }
 
-        // Check if marker exists (preferred injection point)
-        if (str_contains($podfile, '# NATIVEPHP_PLUGIN_PODS')) {
-            $podfile = str_replace(
-                '# NATIVEPHP_PLUGIN_PODS',
-                "# NativePHP Plugin Dependencies\n{$newPodLines}",
-                $podfile
+        // Check if marker exists (preferred injection point).
+        //
+        // The shipped iOS Podfile template uses a paired marker block so the same
+        // injection site works on every run:
+        //
+        //   # NATIVEPHP_PLUGIN_PODS_START
+        //   # NATIVEPHP_PLUGIN_PODS_END
+        //
+        // Replace the entire block (preserving the markers) so subsequent runs are
+        // idempotent. A naive str_replace on '# NATIVEPHP_PLUGIN_PODS' would match
+        // both marker lines and corrupt them into 'pod ...'_START / 'pod ...'_END.
+        $blockPattern = '/^[ \t]*# NATIVEPHP_PLUGIN_PODS_START\s*?\R.*?^[ \t]*# NATIVEPHP_PLUGIN_PODS_END[ \t]*$/ms';
+
+        if (preg_match($blockPattern, $podfile)) {
+            $replacement = "  # NATIVEPHP_PLUGIN_PODS_START\n"
+                ."  # NativePHP Plugin Dependencies\n"
+                ."{$newPodLines}\n"
+                .'  # NATIVEPHP_PLUGIN_PODS_END';
+
+            $podfile = preg_replace_callback(
+                $blockPattern,
+                fn () => $replacement,
+                $podfile,
+                1
+            );
+        } elseif (str_contains($podfile, '# NATIVEPHP_PLUGIN_PODS')) {
+            // Legacy single-marker template — replace it once with the comment + pods.
+            $podfile = preg_replace(
+                '/# NATIVEPHP_PLUGIN_PODS\b(?!_)/',
+                "# NativePHP Plugin Dependencies\n".addcslashes($newPodLines, '\\$'),
+                $podfile,
+                1
             );
         } else {
             // Find the NativePHP target block and insert before its 'end'
@@ -1010,7 +1063,8 @@ platform :ios, '15.0'
 use_frameworks!
 
 target 'NativePHP' do
-  # NATIVEPHP_PLUGIN_PODS
+  # NATIVEPHP_PLUGIN_PODS_START
+  # NATIVEPHP_PLUGIN_PODS_END
 end
 
 post_install do |installer|
